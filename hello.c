@@ -7,6 +7,9 @@
 #include <string.h>
 #include <arm_neon.h>
 
+const double PI = 22.0/7.0;
+
+
 struct rgb
 {
   char r;
@@ -58,12 +61,12 @@ void saveImg(uint8_t* name, unsigned char* img_pixels, int width, int height){
   fclose (fp);
 }
 
-void reorder(uint8_t* bg_pivot, uint8_t width, uint8_t height, int nGauss,
+void reorder(uint8_t* bg_pivot, int width, int height, int nGauss,
              double* sigmas, double* omegas, double* mus,
              double bg_thresh){
   
-  for(uint8_t i = 0; i < width; ++i){
-    for(uint8_t j = 0; j < height; ++j){
+  for(int i = 0; i < width; ++i){
+    for(int j = 0; j < height; ++j){
       int changed = 0;
       double* ratios = (double*)malloc(nGauss*sizeof(double));
       for(int k = 0; k < nGauss; ++k){
@@ -110,8 +113,23 @@ void reorder(uint8_t* bg_pivot, uint8_t width, uint8_t height, int nGauss,
         if(!changed){
           bg_pivot[i*height+j]=nGauss-2;
         }
+      free(ratios);
+      free(indices);
     }
   }
+}
+
+double norm_multi_pdf(unsigned char* X, double* mus, double covar){
+  double det = pow(covar, 3);
+  double norm_const = 1.0 / (pow(2*PI, 1.5)*pow(det, 0.5));
+  double* x_mu = (double*)malloc(3*sizeof(double));
+  for(int i=0; i < 3; ++i){
+    x_mu[i] = X[i] - mus[i];
+  }
+  double inv = 1.0/covar;
+  double result = pow(exp(1.0), -0.5*inv*dot(x_mu, x_mu, 3));
+  free(x_mu);
+  return norm_const * result;
 }
 
 void updateParams(uint8_t* labels, int width, int height, int nGauss,
@@ -135,16 +153,6 @@ void updateParams(uint8_t* labels, int width, int height, int nGauss,
         double toDot[3] = {tmp*Xmu[0], tmp*Xmu[1], tmp*Xmu[2]};
         double dist = dot(Xmu, toDot, 3);
 
-        //printf("%g %g\n", tmp, dot(toDot, Xmu,  3));
-        /*if(i*j > ((width*height)/2)){
-          printf("%d\n", i*j);
-          printf("%d\n", width);
-          printf("%d %d %d\n", pixel[0], pixel[1], pixel[2]);
-          printf("%d %d %d\n", Xmu[0], Xmu[1], Xmu[2]);
-          printf("%g\n", dist);
-          while(1){}
-        }*/
-        //printf("%g\n", dist);
         if(dist < 6.25*sigmas[(i*height*nGauss)+(j*nGauss)+k]){
           match = k;
           break;
@@ -156,29 +164,41 @@ void updateParams(uint8_t* labels, int width, int height, int nGauss,
         omegas[(i*height*nGauss)+(j*nGauss)+2] = (1.0 - lr)*omegas[(i*height*nGauss)+(j*nGauss)+2];
         omegas[(i*height*nGauss)+(j*nGauss)+match] += lr;
 
-        double rho = 0.0001;
+        //rho powinno byc z tej gestosci
+        double* chosenMus = (double*)malloc(3*sizeof(double));
+        for(int mu = 0; mu < 3; ++mu){
+          chosenMus[mu] =  mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+mu];
+        }
+
+        //printf("%g\n", norm_multi_pdf(pixel, chosenMus, sigmas[(i*height*nGauss)+(j*nGauss)+match]));
+        //while(1){}
+        double rho = lr*norm_multi_pdf(pixel, chosenMus, sigmas[(i*height*nGauss)+(j*nGauss)+match]);
         double tmp[3] = {pixel[0] - mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+0],
                         pixel[1] - mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+1],
                         pixel[2] - mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+2]};
-        omegas[(i*height*nGauss)+(j*nGauss)+match] = rho*omegas[(i*height*nGauss)+(j*nGauss)+match]+
-                                                       rho*dot(tmp, tmp, 3);
-        mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+0] = rho*mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+0]+
+        //omegas[(i*height*nGauss)+(j*nGauss)+match] = rho*omegas[(i*height*nGauss)+(j*nGauss)+match]+
+         //                                              rho*dot(tmp, tmp, 3);
+        mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+0] = (1-rho)*mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+0]+
                                                             rho*pixel[0];
-        mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+1] = rho*mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+1]+
+        //printf("%g\n", mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+0]);
+        //while(1){}
+        mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+1] = (1-rho)*mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+1]+
                                                             rho*pixel[1];
-        mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+2] = rho*mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+2]+
+        mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+2] = (1-rho)*mus[(i*height*nGauss*3)+(j*nGauss*3)+(match*3)+2]+
                                                             rho*pixel[2];
         if(match > pivot_bg[i*height+j]){
-          labels[i*height+j] = 255;
+          labels[i*height+j] = 250;
         }
+        free(chosenMus);
       }
       else{
         mus[(i*height*nGauss*3)+(j*nGauss*3)+((nGauss-1)*3)+0] = pixel[0];
         mus[(i*height*nGauss*3)+(j*nGauss*3)+((nGauss-1)*3)+1] = pixel[1];
         mus[(i*height*nGauss*3)+(j*nGauss*3)+((nGauss-1)*3)+2] = pixel[2];
-        labels[i*height+j] = 255;
+        labels[i*height+j] = 250;
       }
 
+      free(pixel);
     }
   }
 
@@ -190,8 +210,6 @@ void MOG(int width, int height, int n, unsigned char* name){
   double BG_thresh = 0.6;
   double learning_rate = 0.01;
   double* mus;
-  uint8_t* bg_pivots = (uint8_t*)malloc(width*height*sizeof(u_int8_t));
-  uint8_t* labels = (uint8_t*)malloc(width*height*sizeof(u_int8_t));
   mus = (double*) malloc (width * height * numOfGauss*3*sizeof (double));
   
   double* sigma2;
@@ -221,27 +239,37 @@ void MOG(int width, int height, int n, unsigned char* name){
       omegas[(i*height*numOfGauss)+(j*numOfGauss)+2] = 1.0/numOfGauss;
     }
   }
-  for(int i = 0; i < n+1; i++){
+  for(int i = 1; i < n+1; i++){
     char *num;
     char buffer[20];
-    char filename[50] = "moving/";
+    char filename[50] = "data/";
     strcat(filename, name);
     snprintf(buffer, 20, "%d", i);
     strcat(filename, buffer);
     strcat(filename, ".ppm");
     printf("%s\n", filename);
+    uint8_t* bg_pivots = (uint8_t*)malloc(width*height*sizeof(u_int8_t));
+    uint8_t* labels = (uint8_t*)malloc(width*height*sizeof(u_int8_t));
+    for(int l = 0; l < width*height; ++l) labels[l]  = 0x0;
     unsigned char* inpixels = (unsigned char *) malloc (width * height * 3 *
 			      sizeof (unsigned char));
     loadImg(filename, inpixels);
     reorder(bg_pivots, width, height, numOfGauss, sigma2, omegas, mus, BG_thresh);
+    
     updateParams(labels, width, height, numOfGauss, sigma2, omegas,
                 mus, BG_thresh, 0.01, bg_pivots, inpixels);
     char outname[50] = "out/out";
     strcat(outname, buffer);
     strcat(outname, ".ppm");
     saveImg(outname, labels, width, height);
+    
+    free(inpixels);
+    free(labels);
+    free(bg_pivots);
   }
-
+  free(mus);
+  free(sigma2);
+  free(omegas);
 
 }
 
@@ -253,20 +281,6 @@ int main (int argc, char* argv[])
   int n = atoi(argv[3]);
   uint8_t* name = argv[4];
 
-  unsigned char* inpixels,* outpixels;
-
-  inpixels =
-    (unsigned char *) malloc (width * height * 3 *
-			      sizeof (unsigned char));
-  loadImg(name, inpixels);
-
-  outpixels =
-    (unsigned char *) malloc (width * height * sizeof (unsigned char));
-
-
-  neon_grayscale (outpixels, inpixels, width * height);
-
-  saveImg("out.ppm", outpixels, width, height);
   MOG(width, height, n, name);
   return 0;
 }
